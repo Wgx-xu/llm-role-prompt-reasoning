@@ -11,7 +11,6 @@ BASE_URL = "https://api.deepseek.com"
 MODEL = "deepseek-flash"
 TEMPERATURE = 0.0
 
-# 三类题目：文件路径 + 难度标签
 DATA_FILES = [
     ("data/simple.json", "simple"),
     ("data/medium.json", "medium"),
@@ -19,13 +18,14 @@ DATA_FILES = [
 ]
 
 OUTPUT_CSV = "results/raw_results.csv"
-
 client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-# ============ 提示模板 ============
+# ============ 核心修改：丰富角色条件 ============
 CONDITIONS = {
     "baseline": "",
-    "mathematician": "你是一个数学家。"
+    "mathematician": "你是一个数学家。",
+    "efficient_math": "你是一个极其注重效率的数学家。请用最精简的步骤推导，不需要任何多余的解释或过渡句，直接给出结论。",
+    "careless_student": "你是一个经常粗心大意的学生。"
 }
 
 USER_TEMPLATE = (
@@ -36,7 +36,6 @@ USER_TEMPLATE = (
 
 # ============ 工具函数 ============
 def extract_answer(text):
-    """从模型输出中提取最终答案"""
     if not text:
         return None
     m = re.search(r"####\s*([-+]?\d+(?:\.\d+)?)", text)
@@ -46,7 +45,6 @@ def extract_answer(text):
     return nums[-1] if nums else None
 
 def normalize(x):
-    """数值归一化，容忍 8 和 8.0 的差异；小数统一保留两位"""
     if x is None:
         return None
     try:
@@ -63,7 +61,6 @@ def call_api(prompt):
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=TEMPERATURE,
-        # 不传 max_tokens，让模型自由生成
     )
     latency = time.time() - t0
     content = resp.choices[0].message.content
@@ -72,7 +69,6 @@ def call_api(prompt):
 
 # ============ 主流程 ============
 def load_data():
-    """从多个文件加载数据，并自动打上难度标签"""
     all_data = []
     for path, difficulty in DATA_FILES:
         with open(path, "r", encoding="utf-8") as f:
@@ -110,12 +106,14 @@ def run():
                 "pred": pred,
                 "correct": int(correct),
                 "latency": round(latency, 3),
-                "completion_tokens": getattr(usage, "completion_tokens", None) if usage else None,
+                "prompt_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
+                "completion_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
+                "total_tokens": getattr(usage, "total_tokens", 0) if usage else 0,
+                "raw_output": content  # 保存原始输出以便核查
             })
 
             done += 1
-            print(f"[{done}/{total}] {item['id']} | {item['difficulty']} | {cond} | "
-                  f"pred={pred} gold={item['gold']} correct={correct}")
+            print(f"[{done}/{total}] {item['id']} | {item['difficulty']} | {cond} | correct={correct}")
 
     with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=rows[0].keys())

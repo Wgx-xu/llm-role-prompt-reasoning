@@ -12,96 +12,90 @@ os.makedirs("results", exist_ok=True)
 # ============ 读取数据 ============
 df = pd.read_csv("results/raw_results.csv")
 
-# 保证难度按 simple -> medium -> hard 排序
+# 保证排序
 DIFF_ORDER = ["simple", "medium", "hard"]
-DIFF_LABELS = {"simple": "简单题", "medium": "中等题", "hard": "困难题"}
+COND_ORDER = ["baseline", "mathematician", "efficient_math", "careless_student"]
+COND_LABELS = {
+    "baseline": "无角色",
+    "mathematician": "数学家",
+    "efficient_math": "高效数学家",
+    "careless_student": "粗心学生"
+}
 df["difficulty"] = pd.Categorical(df["difficulty"], categories=DIFF_ORDER, ordered=True)
 
-# ============ 1. 按难度 + 条件的汇总 ============
+# ============ 1. 汇总统计 ============
 summary = df.groupby(["difficulty", "condition"], observed=True).agg(
     accuracy=("correct", "mean"),
     avg_latency=("latency", "mean"),
-    avg_completion_tokens=("completion_tokens", "mean"),
+    avg_tokens=("completion_tokens", "mean"),
     count=("correct", "count"),
 ).reset_index()
 
+# 计算效率指标：每秒答对题数（Accuracy / Latency）
+summary["efficiency_speed"] = summary["accuracy"] / summary["avg_latency"]
+
 summary.to_csv("results/summary_by_condition.csv", index=False)
-print("=== 汇总结果（按难度与角色） ===")
+print("=== 汇总结果 ===")
 print(summary)
 
-# ============ 2. 总体准确率（不分难度） ============
-overall_acc = df.groupby("condition")["correct"].mean().reset_index()
-print("\n=== 总体准确率（不分难度） ===")
-print(overall_acc)
+# ============ 2. 绘图与可视化 ============
 
-# ============ 3. 按难度分组的准确率 ============
-acc_by_diff = df.groupby(["difficulty", "condition"], observed=True)["correct"].mean().reset_index()
-print("\n=== 分难度准确率 ===")
-print(acc_by_diff)
-
-# ============ 4. 作图 ============
-
-# 准备 pivot 数据
-pivot_acc = summary.pivot(index="difficulty", columns="condition", values="accuracy").reindex(DIFF_ORDER)
-pivot_lat = summary.pivot(index="difficulty", columns="condition", values="avg_latency").reindex(DIFF_ORDER)
-pivot_tok = summary.pivot(index="difficulty", columns="condition", values="avg_completion_tokens").reindex(DIFF_ORDER)
-
-# 图1：准确率对比（三个难度）—— 图例改为左上角
-fig, ax = plt.subplots(figsize=(9, 5))
+# 图1：准确率对比（柱状图）
+fig, ax = plt.subplots(figsize=(10, 5))
+pivot_acc = summary.pivot(index="difficulty", columns="condition", values="accuracy").reindex(columns=COND_ORDER)
 x = np.arange(len(pivot_acc))
-width = 0.35
-ax.bar(x - width/2, pivot_acc["baseline"], width, label="无角色")
-ax.bar(x + width/2, pivot_acc["mathematician"], width, label="数学家")
+width = 0.2
+for i, cond in enumerate(COND_ORDER):
+    if cond in pivot_acc.columns:
+        ax.bar(x + (i - 1.5) * width, pivot_acc[cond], width, label=COND_LABELS[cond])
 ax.set_xticks(x)
-ax.set_xticklabels([DIFF_LABELS[d] for d in pivot_acc.index])
+ax.set_xticklabels([{"simple":"简单题","medium":"中等题","hard":"困难题"}[d] for d in pivot_acc.index])
 ax.set_ylabel("准确率")
-ax.set_title("角色扮演对推理准确率的影响（按难度）")
+ax.set_title("不同角色设定对推理准确率的影响")
 ax.set_ylim(0, 1.1)
-for i, v in enumerate(pivot_acc["baseline"]):
-    ax.text(i - width/2, v + 0.02, f"{v:.1%}", ha="center")
-for i, v in enumerate(pivot_acc["mathematician"]):
-    ax.text(i + width/2, v + 0.02, f"{v:.1%}", ha="center")
 ax.legend()
 plt.tight_layout()
 plt.savefig("figures/accuracy_comparison.png", dpi=300)
 plt.close()
 
-# 图2：平均延迟对比（三个难度）
-fig, ax = plt.subplots(figsize=(9, 5))
-ax.bar(x - width/2, pivot_lat["baseline"], width, label="无角色")
-ax.bar(x + width/2, pivot_lat["mathematician"], width, label="数学家")
-ax.set_xticks(x)
-ax.set_xticklabels([DIFF_LABELS[d] for d in pivot_lat.index])
-ax.set_ylabel("平均延迟（秒）")
-ax.set_title("角色扮演对响应时间的影响（按难度）")
-for i, v in enumerate(pivot_lat["baseline"]):
-    ax.text(i - width/2, v + 0.02, f"{v:.2f}", ha="center")
-for i, v in enumerate(pivot_lat["mathematician"]):
-    ax.text(i + width/2, v + 0.02, f"{v:.2f}", ha="center")
-ax.legend()
+# 图2：延迟与Token的箱线图（观察数据分布）
+fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+
+# 延迟箱线图
+df.boxplot(column="latency", by="condition", ax=axes[0], grid=False)
+axes[0].set_title("不同角色的响应延迟分布")
+axes[0].set_ylabel("延迟 (秒)")
+axes[0].set_xlabel("角色")
+axes[0].set_xticklabels([COND_LABELS.get(l.get_text(), l.get_text()) for l in axes[0].get_xticklabels()])
+
+# Token箱线图
+df.boxplot(column="completion_tokens", by="condition", ax=axes[1], grid=False)
+axes[1].set_title("不同角色的输出Token分布")
+axes[1].set_ylabel("输出 Token 数")
+axes[1].set_xlabel("角色")
+axes[1].set_xticklabels([COND_LABELS.get(l.get_text(), l.get_text()) for l in axes[1].get_xticklabels()])
+plt.suptitle("") # 去掉默认的 suptitle
 plt.tight_layout()
-plt.savefig("figures/latency_comparison.png", dpi=300)
+plt.savefig("figures/boxplots_performance.png", dpi=300)
 plt.close()
 
-# 图3：平均输出 token 对比（三个难度）
-fig, ax = plt.subplots(figsize=(9, 5))
-ax.bar(x - width/2, pivot_tok["baseline"], width, label="无角色")
-ax.bar(x + width/2, pivot_tok["mathematician"], width, label="数学家")
+# 图3：不同角色的综合效率（每秒答对题数）
+fig, ax = plt.subplots(figsize=(10, 5))
+pivot_eff = summary.pivot(index="difficulty", columns="condition", values="efficiency_speed").reindex(columns=COND_ORDER)
+for i, cond in enumerate(COND_ORDER):
+    if cond in pivot_eff.columns:
+        ax.bar(x + (i - 1.5) * width, pivot_eff[cond], width, label=COND_LABELS[cond])
 ax.set_xticks(x)
-ax.set_xticklabels([DIFF_LABELS[d] for d in pivot_tok.index])
-ax.set_ylabel("平均输出 token 数")
-ax.set_title("角色扮演对输出 token 消耗的影响（按难度）")
-for i, v in enumerate(pivot_tok["baseline"]):
-    ax.text(i - width/2, v + 0.5, f"{v:.1f}", ha="center")
-for i, v in enumerate(pivot_tok["mathematician"]):
-    ax.text(i + width/2, v + 0.5, f"{v:.1f}", ha="center")
+ax.set_xticklabels([{"simple":"简单题","medium":"中等题","hard":"困难题"}[d] for d in pivot_eff.index])
+ax.set_ylabel("综合效率 (答对题数 / 秒)")
+ax.set_title("角色设定对系统吞吐效率的影响")
 ax.legend()
 plt.tight_layout()
-plt.savefig("figures/token_comparison.png", dpi=300)
+plt.savefig("figures/efficiency_comparison.png", dpi=300)
 plt.close()
 
-print("\n图表已保存到 figures/：")
-print("  - accuracy_comparison.png   （三难度准确率对比）")
-print("  - latency_comparison.png    （三难度延迟对比）")
-print("  - token_comparison.png      （三难度 token 消耗对比）")
+print("\n图表已保存到 figures/ 目录：")
+print("  1. accuracy_comparison.png   (准确率对比)")
+print("  2. boxplots_performance.png  (性能分布箱线图)")
+print("  3. efficiency_comparison.png (综合吞吐效率)")
 print("汇总表已保存到 results/summary_by_condition.csv")
